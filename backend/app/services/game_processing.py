@@ -1,4 +1,4 @@
-"""Transform imported game records without making network requests."""
+from backend.app.services.pgn import extract_move_positions, parse_pgn_games
 
 
 def group_games_by_time_class(games: list[dict]) -> dict[str, list[dict]]:
@@ -19,4 +19,44 @@ def group_games_by_time_class(games: list[dict]) -> dict[str, list[dict]]:
         buckets[time_class].append(game)
 
     return buckets
+
+def get_user_color(game: dict, username: str) -> str:
+    username = username.strip().lower()
+
+    if game["white"]["username"].lower() == username:
+        return "white"
+    if game["black"]["username"].lower() == username:
+        return "black"
+
+    raise ValueError("User is not a player in this game")
+
+def process_game(game: dict, username: str) -> dict | None:
+    color = get_user_color(game, username)
+    parsed_games = parse_pgn_games(game["pgn"])
+
+    if not parsed_games:
+        return None
+
+    if len(parsed_games) != 1:
+        raise ValueError("Expected one playable game per Chess.com record")
+
+    moves = extract_move_positions(parsed_games[0])
+
+    
+
+    return {
+        "source": "chess.com",
+        "source_url": game["url"],
+        "username": username.strip().lower(),
+        "user_color": color,
+        "white_username": game["white"]["username"],
+        "black_username": game["black"]["username"],
+        "user_result": game[color]["result"],
+        "time_class": game["time_class"],
+        "end_time": game["end_time"],
+        "pgn": game["pgn"],
+        "moves": moves,
+    }
+
+
    
