@@ -68,6 +68,7 @@ def test_get_user_color_rejects_unrelated_user():
 
 def test_process_game_combines_metadata_and_moves():
     game = {
+        "rules": "chess",
         "url": "https://www.chess.com/game/live/123",
         "white": {"username": "Hikaru", "result": "win"},
         "black": {"username": "Opponent", "result": "resigned"},
@@ -94,6 +95,7 @@ def test_process_game_combines_metadata_and_moves():
 
 def test_process_game_skips_game_without_moves():
     game = {
+        "rules": "chess",
         "white": {"username": "Hikaru"},
         "black": {"username": "Opponent"},
         "pgn": '[Event "Empty"]\n\n*',
@@ -104,6 +106,7 @@ def test_process_game_skips_game_without_moves():
 
 def test_process_game_rejects_multiple_playable_games():
     game = {
+        "rules": "chess",
         "white": {"username": "Hikaru"},
         "black": {"username": "Opponent"},
         "pgn": """
@@ -120,3 +123,159 @@ def test_process_game_rejects_multiple_playable_games():
     with pytest.raises(ValueError, match="Expected one playable game"):
         process_game(game, "hikaru")
 
+@pytest.mark.parametrize(
+    "black_player, message",
+    [
+        (None, "black player must be a dictionary"),
+        ("opponent", "black player must be a dictionary"),
+        ({}, "black username must be a nonempty string"),
+        ({"username": ""}, "black username must be a nonempty string"),
+        ({"username": "   "}, "black username must be a nonempty string"),
+        ({"username": 123}, "black username must be a nonempty string"),
+    ],
+)
+def test_get_user_color_validates_opponent_before_returning(
+    black_player, message
+):
+    game = {
+        "white": {"username": "Hikaru"},
+        "black": black_player,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        get_user_color(game, "hikaru")
+
+@pytest.mark.parametrize("missing_color", ["white", "black"])
+def test_get_user_color_rejects_missing_player(missing_color):
+    game = {
+        "white": {"username": "Hikaru"},
+        "black": {"username": "Opponent"},
+    }
+    del game[missing_color]
+
+    with pytest.raises(
+        ValueError, match=f"{missing_color} player must be a dictionary"
+    ):
+        get_user_color(game, "hikaru")
+
+
+@pytest.mark.parametrize("username", [None, 123, "", " \t\n"])
+def test_get_user_color_rejects_invalid_username(username):
+    game = {
+        "white": {"username": "Hikaru"},
+        "black": {"username": "Opponent"},
+    }
+
+    with pytest.raises(ValueError, match="username must be a nonempty string"):
+        get_user_color(game, username)
+
+
+@pytest.mark.parametrize("game", [None, [], "not a game", 123])
+def test_get_user_color_rejects_non_dictionary_game(game):
+    with pytest.raises(ValueError, match="game must be a dictionary"):
+        get_user_color(game, "hikaru")
+
+@pytest.fixture
+def valid_game():
+    return {
+        "rules": "chess",
+        "url": "https://www.chess.com/game/live/123",
+        "white": {"username": "Hikaru", "result": "win"},
+        "black": {"username": "Opponent", "result": "resigned"},
+        "time_class": "blitz",
+        "end_time": 1234567890,
+        "pgn": '[Result "1-0"]\n\n1. e4 e5 1-0',
+    }
+
+
+@pytest.mark.parametrize("end_time", [None, -1, True, 1.5, "123"])
+def test_process_game_rejects_invalid_end_time(valid_game, end_time):
+    valid_game["end_time"] = end_time
+
+    with pytest.raises(
+        ValueError, match="end_time must be a nonnegative integer"
+    ):
+        process_game(valid_game, "hikaru")
+
+
+def test_process_game_rejects_missing_end_time(valid_game):
+    del valid_game["end_time"]
+
+    with pytest.raises(
+        ValueError, match="end_time must be a nonnegative integer"
+    ):
+        process_game(valid_game, "hikaru")
+
+@pytest.mark.parametrize("field", ["url", "time_class"])
+@pytest.mark.parametrize("value", [None, "", " \t", 123])
+def test_process_game_rejects_invalid_text_metadata(valid_game, field, value):
+    valid_game[field] = value
+
+    with pytest.raises(ValueError, match=f"{field} must be a nonempty string"):
+        process_game(valid_game, "hikaru")
+
+
+@pytest.mark.parametrize("field", ["url", "time_class"])
+def test_process_game_rejects_missing_text_metadata(valid_game, field):
+    del valid_game[field]
+
+    with pytest.raises(ValueError, match=f"{field} must be a nonempty string"):
+        process_game(valid_game, "hikaru")
+
+
+@pytest.mark.parametrize("value", [None, "", " \t", 123])
+def test_process_game_rejects_invalid_user_result(valid_game, value):
+    valid_game["white"]["result"] = value
+
+    with pytest.raises(ValueError, match="user result must be a nonempty string"):
+        process_game(valid_game, "hikaru")
+
+
+def test_process_game_rejects_missing_user_result(valid_game):
+    del valid_game["white"]["result"]
+
+    with pytest.raises(ValueError, match="user result must be a nonempty string"):
+        process_game(valid_game, "hikaru")
+
+
+def test_process_game_rejects_missing_pgn(valid_game):
+    del valid_game["pgn"]
+
+    with pytest.raises(ValueError, match="PGN must be a nonempty string"):
+        process_game(valid_game, "hikaru")
+
+
+@pytest.mark.parametrize("rules", ["chess960", "crazyhouse", None, ""])
+def test_process_game_rejects_unsupported_rules(valid_game, rules):
+    valid_game["rules"] = rules
+
+    with pytest.raises(ValueError, match="Only standard chess is supported"):
+        process_game(valid_game, "hikaru")
+
+
+@pytest.mark.parametrize("variant", ["Chess960", "Crazyhouse"])
+def test_process_game_rejects_variant_pgn_with_standard_metadata(valid_game, variant):
+    # The metadata says standard chess, but the PGN selects different rules.
+    valid_game["pgn"] = f'[Variant "{variant}"]\n\n1. e4 e5 *'
+
+    with pytest.raises(ValueError, match="PGN must describe standard chess"):
+        process_game(valid_game, "hikaru")
+
+
+def test_process_game_accepts_standard_custom_starting_position(valid_game):
+    valid_game["pgn"] = (
+        '[SetUp "1"]\n'
+        '[FEN "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"]\n'
+        '[Result "1-0"]\n\n'
+        '1. O-O 1-0'
+    )
+
+    result = process_game(valid_game, "hikaru")
+
+    assert result is not None
+    assert result["rules"] == "chess"
+    assert len(result["moves"]) == 1
+    assert result["moves"][0]["uci"] == "e1g1"
+    assert result["moves"][0]["fen_before"] == (
+        "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"
+    )

@@ -230,3 +230,65 @@ def test_recent_games_does_not_return_partial_results_on_failure(failure):
         with pytest.raises(expected_error):
             get_recent_games("hikaru", 3, client=client)
         assert not client.is_closed
+
+
+@pytest.mark.parametrize("archive", [
+    "not-a-url",
+    "https://example.com/pub/player/hikaru/games/2026/09",
+    "https://api.chess.com/pub/player/other/games/2026/09",
+    "https://api.chess.com/pub/player/hikaru/games/2026/00",
+    "https://api.chess.com/pub/player/hikaru/games/2026/13",
+    "https://api.chess.com/pub/player/hikaru/games/2026/9",
+    "https://api.chess.com/pub/player/hikaru/games/0000/09",
+    "https://api.chess.com/pub/player/hikaru/games/year/09",
+    "https://api.chess.com/pub/player/hikaru/games/2026/09?extra=1",
+])
+def test_recent_games_rejects_bad_archive_before_monthly_request(archive):
+    def handler(request):
+        assert request.url.path == "/pub/player/hikaru/games/archives"
+        return httpx.Response(200, json={"archives": [archive]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="invalid monthly archive URL"):
+            get_recent_games("hikaru", 1, client=client)
+
+
+@pytest.mark.parametrize("months", [["09", "08"], ["09", "09"]])
+def test_archives_rejects_out_of_order_or_duplicate_months(months):
+    archives = [
+        f"https://api.chess.com/pub/player/hikaru/games/2026/{month}"
+        for month in months
+    ]
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"archives": archives})
+    )
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(ValueError, match="unique and ordered oldest first"):
+            get_player_archives("hikaru", client=client)
+
+
+@pytest.mark.parametrize("game", [
+    {}, {"end_time": None}, {"end_time": -1}, {"end_time": True},
+    {"end_time": 1.5}, {"end_time": "123"}, {"end_time": []},
+])
+def test_recent_games_rejects_invalid_timestamp_before_sorting(game):
+    base = "https://api.chess.com/pub/player/hikaru/games"
+
+    def handler(request):
+        if str(request.url) == f"{base}/archives":
+            return httpx.Response(200, json={"archives": [f"{base}/2026/09"]})
+        assert str(request.url) == f"{base}/2026/09"
+        # A valid game first ensures bad records are checked even when count is met.
+        return httpx.Response(200, json={"games": [{"end_time": 100}, game]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="index 1.*nonnegative integer end_time"):
+            get_recent_games("hikaru", 1, client=client)
+
+
+def test_monthly_games_accepts_zero_timestamp():
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"games": [{"end_time": 0}]})
+    )
+    with httpx.Client(transport=transport) as client:
+        assert get_monthly_games("hikaru", 2026, 9, client=client) == [{"end_time": 0}]

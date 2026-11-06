@@ -1,6 +1,7 @@
 """Read public player data from Chess.com's Published-Data API."""
 
 from contextlib import nullcontext
+import re
 from urllib.parse import quote
 
 import httpx
@@ -41,6 +42,20 @@ def get_player_archives(
         isinstance(archive, str) for archive in archives
     ):
         raise ValueError("Chess.com response must contain an 'archives' list of strings")
+
+    archive_pattern = re.compile(
+        re.escape(f"{BASE_URL}/player/{quote(username, safe='')}/games/")
+        + r"([0-9]{4})/(0[1-9]|1[0-2])"
+    )
+    previous_month = (0, 0)
+    for archive in archives:
+        match = archive_pattern.fullmatch(archive)
+        if match is None or int(match[1]) == 0:
+            raise ValueError("Chess.com returned an invalid monthly archive URL")
+        archive_month = (int(match[1]), int(match[2]))
+        if archive_month <= previous_month:
+            raise ValueError("Chess.com archives must be unique and ordered oldest first")
+        previous_month = archive_month
     return archives
 
 
@@ -73,6 +88,13 @@ def get_monthly_games(
         isinstance(game, dict) for game in games
     ):
         raise ValueError("Chess.com response must contain a 'games' list of dictionaries")
+
+    for index, game in enumerate(games):
+        end_time = game.get("end_time")
+        if type(end_time) is not int or end_time < 0:
+            raise ValueError(
+                f"Chess.com game at index {index} must contain a nonnegative integer end_time"
+            )
 
     return games
 

@@ -21,18 +21,42 @@ def group_games_by_time_class(games: list[dict]) -> dict[str, list[dict]]:
     return buckets
 
 def get_user_color(game: dict, username: str) -> str:
-    username = username.strip().lower()
+    if not isinstance(username, str) or not username.strip():
+        raise ValueError("username must be a nonempty string")
 
-    if game["white"]["username"].lower() == username:
-        return "white"
-    if game["black"]["username"].lower() == username:
-        return "black"
+    if not isinstance(game, dict):
+        raise ValueError("game must be a dictionary")
+
+    username = username.strip().lower()
+    player_names = {}
+
+    for color in ("white", "black"):
+        player = game.get(color)
+
+        if not isinstance(player, dict):
+            raise ValueError(f"{color} player must be a dictionary")
+
+        player_name = player.get("username")
+
+        if not isinstance(player_name, str) or not player_name.strip():
+            raise ValueError(f"{color} username must be a nonempty string")
+
+        player_names[color] = player_name.strip().lower()
+
+    for color, player_name in player_names.items():
+        if player_name == username:
+            return color
 
     raise ValueError("User is not a player in this game")
 
 def process_game(game: dict, username: str) -> dict | None:
     color = get_user_color(game, username)
-    parsed_games = parse_pgn_games(game["pgn"])
+    rules = game.get("rules")
+
+    if rules != "chess":
+        raise ValueError("Only standard chess is supported; rules must be 'chess'")
+
+    parsed_games = parse_pgn_games(game.get("pgn"))
 
     if not parsed_games:
         return None
@@ -40,7 +64,29 @@ def process_game(game: dict, username: str) -> dict | None:
     if len(parsed_games) != 1:
         raise ValueError("Expected one playable game per Chess.com record")
 
-    moves = extract_move_positions(parsed_games[0])
+    parsed_game = parsed_games[0]
+    board = parsed_game.board()
+
+    if board.uci_variant != "chess" or board.chess960:
+        raise ValueError("PGN must describe standard chess")
+    
+    for field in ("url", "time_class"):
+        value = game.get(field)
+
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field} must be a nonempty string")
+
+    user_result = game[color].get("result")
+
+    if not isinstance(user_result, str) or not user_result.strip():
+        raise ValueError("user result must be a nonempty string")
+
+    end_time = game.get("end_time")
+
+    if type(end_time) is not int or end_time < 0:
+        raise ValueError("end_time must be a nonnegative integer")
+    
+    moves = extract_move_positions(parsed_game)
 
     
 
@@ -51,11 +97,12 @@ def process_game(game: dict, username: str) -> dict | None:
         "user_color": color,
         "white_username": game["white"]["username"],
         "black_username": game["black"]["username"],
-        "user_result": game[color]["result"],
+        "user_result": user_result,
         "time_class": game["time_class"],
-        "end_time": game["end_time"],
+        "end_time": end_time,
         "pgn": game["pgn"],
         "moves": moves,
+        "rules": rules,
     }
 
 
