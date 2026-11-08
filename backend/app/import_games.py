@@ -6,10 +6,12 @@ import tempfile
 from pathlib import Path
 
 import httpx
+from backend.app.database import get_session_factory
 
 from backend.app.services.game_import import (
     GameProcessingError,
     GameRetrievalError,
+    GameStorageError,
     import_recent_games,
 )
 from backend.app.services.game_processing import group_games_by_time_class
@@ -51,6 +53,10 @@ def main():
         type=Path,
         help="Save processed games as JSON, replacing any existing file",
     )
+    parser.add_argument(
+        "--save-db", action="store_true",
+        help="Save playable games to PostgreSQL after processing succeeds",
+    )
     args = parser.parse_args()
 
     if args.count < 0:
@@ -60,7 +66,12 @@ def main():
         parser.error("username must not be blank")
 
     try:
-        result = import_recent_games(args.username, args.count)
+        if args.save_db:
+            result = import_recent_games(
+                args.username, args.count, session_factory=get_session_factory()
+            )
+        else:
+            result = import_recent_games(args.username, args.count)
     except httpx.HTTPStatusError as error:
         print(
             f"Import failed: Chess.com returned HTTP {error.response.status_code}.",
@@ -79,6 +90,9 @@ def main():
 
     except GameProcessingError as error:
         print(f"Import failed while processing games: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except GameStorageError:
+        print("Import failed: could not save games to PostgreSQL.", file=sys.stderr)
         raise SystemExit(1) from None
 
     processed_games = result["games"]
@@ -100,6 +114,8 @@ def main():
 
     total_positions = sum(len(game["moves"]) for game in processed_games)
     print(f"Extracted {total_positions} move records")
+    if args.save_db:
+        print(f"Persisted {result['processed_count']} games to PostgreSQL (including existing games)")
 
     if args.output is not None:
         print(f"Saved processed games to {args.output}")

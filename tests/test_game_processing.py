@@ -223,20 +223,38 @@ def test_process_game_rejects_missing_text_metadata(valid_game, field):
         process_game(valid_game, "hikaru")
 
 
+@pytest.mark.parametrize("color", ["white", "black"])
 @pytest.mark.parametrize("value", [None, "", " \t", 123])
-def test_process_game_rejects_invalid_user_result(valid_game, value):
-    valid_game["white"]["result"] = value
+def test_process_game_rejects_invalid_player_result(valid_game, color, value):
+    valid_game[color]["result"] = value
 
-    with pytest.raises(ValueError, match="user result must be a nonempty string"):
+    with pytest.raises(
+        ValueError,
+        match=f"{color} result must be a nonempty string",
+    ):
         process_game(valid_game, "hikaru")
 
 
-def test_process_game_rejects_missing_user_result(valid_game):
-    del valid_game["white"]["result"]
+@pytest.mark.parametrize("color", ["white", "black"])
+def test_process_game_rejects_missing_player_result(valid_game, color):
+    del valid_game[color]["result"]
 
-    with pytest.raises(ValueError, match="user result must be a nonempty string"):
+    with pytest.raises(
+        ValueError,
+        match=f"{color} result must be a nonempty string",
+    ):
         process_game(valid_game, "hikaru")
 
+
+@pytest.mark.parametrize("color", ["white", "black"])
+def test_process_game_rejects_overlong_player_result(valid_game, color):
+    valid_game[color]["result"] = "x" * 33
+
+    with pytest.raises(
+        ValueError,
+        match=f"{color} result must not exceed 32 characters",
+    ):
+        process_game(valid_game, "hikaru")
 
 def test_process_game_rejects_missing_pgn(valid_game):
     del valid_game["pgn"]

@@ -329,3 +329,39 @@ def test_export_failure_preserves_existing_file(
     assert captured.out == ""
     assert output_path.read_text(encoding="utf-8") == original
     assert list(tmp_path.iterdir()) == [output_path]
+
+
+def test_cli_passes_database_factory_when_requested(monkeypatch, capsys):
+    factory = object()
+    monkeypatch.setattr(sys, "argv", ["import_games", "test-player", "--save-db"])
+    monkeypatch.setattr(import_games, "get_session_factory", lambda: factory)
+
+    def fake_import(username, count, *, session_factory):
+        assert (username, count) == ("test-player", 5)
+        assert session_factory is factory
+        return {"imported_count": 0, "processed_count": 0, "skipped_count": 0, "games": []}
+
+    monkeypatch.setattr(import_games, "import_recent_games", fake_import)
+    import_games.main()
+    assert "Persisted 0 games" in capsys.readouterr().out
+
+
+def test_cli_storage_failure_does_not_export(monkeypatch, capsys, tmp_path):
+    from backend.app.services.game_import import GameStorageError
+
+    output = tmp_path / "existing.json"
+    output.write_text("previous export", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["import_games", "test-player", "--save-db", "--output", str(output)])
+    monkeypatch.setattr(import_games, "get_session_factory", lambda: object())
+
+    def fail(*args, **kwargs):
+        raise GameStorageError("private details")
+
+    monkeypatch.setattr(import_games, "import_recent_games", fail)
+    with pytest.raises(SystemExit) as error:
+        import_games.main()
+    assert error.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "Import failed: could not save games to PostgreSQL.\n"
+    assert output.read_text(encoding="utf-8") == "previous export"

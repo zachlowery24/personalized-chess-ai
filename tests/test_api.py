@@ -4,11 +4,24 @@ import pytest
 import httpx
 
 from backend.app.main import app
-from backend.app.services.game_import import GameProcessingError, GameRetrievalError
+from backend.app.services.game_import import GameProcessingError, GameRetrievalError, GameStorageError
 from backend.app.services import game_import
 
 
-def test_import_endpoint_returns_processed_games_and_moves(monkeypatch):
+@pytest.fixture(autouse=True)
+def fake_session_factory(monkeypatch):
+    factory = object()
+    # FastAPI stores the dependency callable when the route is registered.
+    # Override that callable rather than replacing its module-level name.
+    monkeypatch.setitem(
+        main.app.dependency_overrides,
+        main.get_session_factory,
+        lambda: factory,
+    )
+    return factory
+
+
+def test_import_endpoint_returns_processed_games_and_moves(monkeypatch, fake_session_factory):
     calls = []
 
     def fake_fetch(username, count):
@@ -23,7 +36,15 @@ def test_import_endpoint_returns_processed_games_and_moves(monkeypatch):
             "pgn": '[Result "1-0"]\n\n1. e4 e5 1-0',
         }]
 
-    # Keep the service and processing real; replace only external retrieval.
+    saved_records = []
+
+    def fake_save(records, session_factory):
+        assert session_factory is fake_session_factory
+        saved_records.extend(records)
+        return [42]
+
+    monkeypatch.setattr(game_import, "save_imported_games", fake_save)
+    # Keep processing real, but replace network retrieval and database storage.
     monkeypatch.setattr(game_import, "get_recent_games", fake_fetch)
 
     with TestClient(main.app) as client:
@@ -37,6 +58,9 @@ def test_import_endpoint_returns_processed_games_and_moves(monkeypatch):
     assert calls == [("hikaru", 2)]
 
     payload = response.json()
+    assert len(saved_records) == 1
+    assert saved_records[0]["url"] == payload["games"][0]["source_url"]
+    assert saved_records[0]["black"]["result"] == "resigned"
     assert payload["imported_count"] == 1
     assert payload["processed_count"] == 1
     assert payload["skipped_count"] == 0
@@ -77,10 +101,11 @@ def test_health_endpoint():
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
-def test_import_endpoint_normalizes_request(monkeypatch):
+def test_import_endpoint_normalizes_request(monkeypatch, fake_session_factory):
     calls = []
 
-    def fake_import(username, count):
+    def fake_import(username, count, *, session_factory):
+        assert session_factory is fake_session_factory
         calls.append((username, count))
         return {
             "imported_count": 0,
@@ -130,7 +155,7 @@ def test_import_endpoint_rejects_invalid_request(monkeypatch, payload):
     assert response.json()["detail"]
 
 def test_import_endpoint_handles_timeout(monkeypatch):
-    def timed_out_import(username, count):
+    def timed_out_import(username, count, *, session_factory):
         raise httpx.ReadTimeout("Response timed out")
 
     monkeypatch.setattr(main, "import_recent_games", timed_out_import)
@@ -147,7 +172,7 @@ def test_import_endpoint_handles_timeout(monkeypatch):
     }
 
 def test_import_endpoint_handles_connection_failure(monkeypatch):
-    def failed_import(username, count):
+    def failed_import(username, count, *, session_factory):
         raise httpx.ConnectError("Connection failed")
 
     monkeypatch.setattr(main, "import_recent_games", failed_import)
@@ -192,7 +217,7 @@ def test_import_endpoint_handles_connection_failure(monkeypatch):
 def test_import_endpoint_handles_upstream_http_error(
     monkeypatch, upstream_status, expected_status, detail
 ):
-    def failed_import(username, count):
+    def failed_import(username, count, *, session_factory):
         request = httpx.Request(
             "GET",
             "https://api.chess.com/pub/player/hikaru/games/archives",
@@ -223,7 +248,7 @@ def test_import_endpoint_handles_upstream_http_error(
     ],
 )
 def test_import_endpoint_handles_service_errors(monkeypatch, error_type, detail):
-    def failed_import(username, count):
+    def failed_import(username, count, *, session_factory):
         raise error_type("Internal diagnostic: malformed source record")
 
     monkeypatch.setattr(main, "import_recent_games", failed_import)
@@ -237,3 +262,21 @@ def test_import_endpoint_handles_service_errors(monkeypatch, error_type, detail)
     assert response.status_code == 502
     assert response.json() == {"detail": detail}
     assert "Internal diagnostic" not in response.text
+
+
+def test_import_endpoint_handles_storage_failure(monkeypatch):
+    def failed_import(username, count, *, session_factory):
+        raise GameStorageError("Internal database connection details")
+
+    monkeypatch.setattr(main, "import_recent_games", failed_import)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/imports/chesscom", json={"username": "hikaru", "count": 2}
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Imported games could not be saved. Please try again later."
+    }
+    assert "Internal database" not in response.text

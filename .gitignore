@@ -5,6 +5,8 @@
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
 
 # Python
 .venv/
@@ -34,7 +36,7 @@ data/processed/*
 /data/processed/
 
 # Machine learning models / artifacts
-models/
+/models/
 *.pkl
 *.joblib
 *.pt

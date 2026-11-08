@@ -76,10 +76,20 @@ def process_game(game: dict, username: str) -> dict | None:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{field} must be a nonempty string")
 
-    user_result = game[color].get("result")
+    for player_color in ("white", "black"):
+        result = game[player_color].get("result")
 
-    if not isinstance(user_result, str) or not user_result.strip():
-        raise ValueError("user result must be a nonempty string")
+        if not isinstance(result, str) or not result.strip():
+            raise ValueError(
+                f"{player_color} result must be a nonempty string"
+            )
+
+        if len(result) > 32:
+            raise ValueError(
+                f"{player_color} result must not exceed 32 characters"
+            )
+
+    user_result = game[color]["result"]
 
     end_time = game.get("end_time")
 
