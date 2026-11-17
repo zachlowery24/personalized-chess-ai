@@ -57,6 +57,14 @@ from backend.app.repositories.analyses import (
 from backend.app.services.engine_analysis import summarize_player_analysis
 
 
+from backend.app.repositories.players import get_player_by_id
+from backend.app.schemas.practice import PracticeQueueResponse, PracticeRevealResponse
+from backend.app.services.practice import build_practice_queue
+
+from backend.app.repositories.practice import get_practice_candidate
+
+
+
 
 
 app = FastAPI(title="Personalized Chess AI")
@@ -420,4 +428,96 @@ def get_game_analyses(
         raise HTTPException(
             status_code=503,
             detail="Saved analyses are temporarily unavailable.",
+        ) from None
+
+
+@app.get(
+    "/players/{player_id}/practice",
+    response_model=PracticeQueueResponse,
+)
+def get_player_practice(
+    player_id: Annotated[int, Path(ge=1)],
+    session_factory: Annotated[
+        sessionmaker[Session],
+        Depends(get_session_factory),
+    ],
+    limit: Annotated[int, Query(ge=1, le=10)] = 3,
+) -> PracticeQueueResponse:
+    try:
+        with session_factory() as session:
+            player = get_player_by_id(session, player_id)
+
+            if player is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Player not found.",
+                )
+
+            return build_practice_queue(
+                session,
+                player_id,
+                limit=limit,
+            )
+
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Practice positions are temporarily unavailable.",
+        ) from None
+
+
+
+@app.get(
+    "/players/{player_id}/practice/{analysis_id}/{ply}/reveal",
+    response_model=PracticeRevealResponse,
+)
+def reveal_practice_position(
+    player_id: Annotated[int, Path(ge=1)],
+    analysis_id: Annotated[int, Path(ge=1)],
+    ply: Annotated[int, Path(ge=1)],
+    session_factory: Annotated[
+        sessionmaker[Session],
+        Depends(get_session_factory),
+    ],
+) -> PracticeRevealResponse:
+    try:
+        with session_factory() as session:
+            move = get_practice_candidate(
+                session,
+                player_id,
+                analysis_id,
+                ply,
+            )
+
+            if move is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Practice position not found.",
+                )
+
+            analysis = get_game_analysis_by_id(session, analysis_id)
+
+            if analysis is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Practice position not found.",
+                )
+
+            return PracticeRevealResponse(
+                game_id=analysis.game_id,
+                analysis_id=analysis.id,
+                ply=move.ply,
+                color=move.color,
+                fen=move.fen_before,
+                played_move=move.uci,
+                recommended_move=move.before_best_move,
+                centipawn_loss=move.centipawn_loss,
+                engine_name=analysis.engine_name,
+                requested_depth=analysis.requested_depth,
+            )
+
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Practice positions are temporarily unavailable.",
         ) from None

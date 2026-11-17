@@ -49,3 +49,10 @@ def get_player_by_username(
     )
 
     return session.execute(statement).scalar_one_or_none()
+
+
+def get_player_by_id(
+    session: Session,
+    player_id: int,
+) -> PlayerProfile | None:
+    return session.get(PlayerProfile, player_id)
